@@ -1,3 +1,5 @@
+![Screenshot](./Screenshot.png)
+
 ```sh
 rm -fr build
 meson setup build --prefix=/usr --libdir=lib/x86_64-linux-gnu
