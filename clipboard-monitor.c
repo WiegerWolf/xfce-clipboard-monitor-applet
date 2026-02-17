@@ -9,6 +9,90 @@ typedef struct {
     guint max_items;
 } ClipboardMonitor;
 
+static gchar *shorten_history_label(const gchar *text) {
+    gchar *single_line;
+    gchar *p;
+    GString *label;
+
+    if (text == NULL || *text == '\0') {
+        return g_strdup("(empty)");
+    }
+
+    single_line = g_strdup(text);
+    p = single_line;
+    while (*p) {
+        if (*p == '\n' || *p == '\r' || *p == '\t') {
+            *p = ' ';
+        }
+        p++;
+    }
+
+    label = g_string_sized_new(64);
+    p = single_line;
+    while (*p) {
+        if (*p != ' ' || (label->len > 0 && label->str[label->len - 1] != ' ')) {
+            g_string_append_c(label, *p);
+        }
+        p++;
+    }
+
+    g_strstrip(label->str);
+    if (label->len > 60) {
+        g_string_truncate(label, 60);
+        g_string_append(label, "…");
+    }
+
+    g_free(single_line);
+    return g_string_free(label, FALSE);
+}
+
+static void on_history_item_activate(GtkMenuItem *item, gpointer user_data) {
+    ClipboardMonitor *monitor = (ClipboardMonitor *)user_data;
+    const gchar *selected_text;
+
+    selected_text = (const gchar *)g_object_get_data(G_OBJECT(item), "clipboard-text");
+    if (selected_text != NULL) {
+        gtk_clipboard_set_text(monitor->clipboard, selected_text, -1);
+    }
+}
+
+static gboolean on_plugin_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data) {
+    ClipboardMonitor *monitor = (ClipboardMonitor *)user_data;
+    GtkWidget *menu;
+
+    if (event->type != GDK_BUTTON_PRESS || event->button != GDK_BUTTON_PRIMARY) {
+        return FALSE;
+    }
+
+    menu = gtk_menu_new();
+
+    if (monitor->history == NULL || g_queue_is_empty(monitor->history)) {
+        GtkWidget *empty_item = gtk_menu_item_new_with_label("Clipboard history is empty");
+        gtk_widget_set_sensitive(empty_item, FALSE);
+        gtk_menu_shell_append(GTK_MENU_SHELL(menu), empty_item);
+    } else {
+        GList *iter;
+
+        for (iter = monitor->history->head; iter != NULL; iter = iter->next) {
+            const gchar *entry_text = (const gchar *)iter->data;
+            GtkWidget *item;
+            gchar *preview;
+
+            preview = shorten_history_label(entry_text);
+            item = gtk_menu_item_new_with_label(preview);
+            g_object_set_data_full(G_OBJECT(item), "clipboard-text", g_strdup(entry_text), g_free);
+            g_signal_connect(item, "activate", G_CALLBACK(on_history_item_activate), monitor);
+            gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+            g_free(preview);
+        }
+    }
+
+    gtk_widget_show_all(menu);
+    gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent *)event);
+
+    return TRUE;
+}
+
 static void on_text_received(GtkClipboard *clipboard, const gchar *text, gpointer user_data) {
     ClipboardMonitor *monitor = (ClipboardMonitor *)user_data;
 
@@ -86,6 +170,8 @@ static void plugin_construct(XfcePanelPlugin *plugin) {
     monitor->clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
     monitor->history = g_queue_new();
     monitor->max_items = 30;
+    gtk_widget_add_events(GTK_WIDGET(plugin), GDK_BUTTON_PRESS_MASK);
+    g_signal_connect(plugin, "button-press-event", G_CALLBACK(on_plugin_button_press), monitor);
     g_signal_connect(monitor->clipboard, "owner-change", G_CALLBACK(on_clipboard_owner_change), monitor);
     g_signal_connect(plugin, "free-data", G_CALLBACK(plugin_free), monitor);
     gtk_widget_show_all(GTK_WIDGET(plugin));
