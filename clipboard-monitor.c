@@ -9,41 +9,69 @@ typedef struct {
     guint max_items;
 } ClipboardMonitor;
 
+#define HISTORY_PREVIEW_MAX_CHARS 60
+
+static gchar *normalize_text_whitespace(const gchar *text) {
+    GString *normalized;
+    const gchar *p;
+    gboolean last_was_space = TRUE;
+
+    if (text == NULL) {
+        return g_strdup("");
+    }
+
+    normalized = g_string_sized_new(64);
+    p = text;
+    while (*p != '\0') {
+        gunichar ch = g_utf8_get_char(p);
+
+        if (ch == '\n' || ch == '\r' || ch == '\t' || ch == ' ') {
+            if (!last_was_space) {
+                g_string_append_c(normalized, ' ');
+                last_was_space = TRUE;
+            }
+        } else {
+            g_string_append_unichar(normalized, ch);
+            last_was_space = FALSE;
+        }
+
+        p = g_utf8_next_char(p);
+    }
+
+    if (normalized->len > 0 && normalized->str[normalized->len - 1] == ' ') {
+        g_string_truncate(normalized, normalized->len - 1);
+    }
+
+    return g_string_free(normalized, FALSE);
+}
+
 static gchar *shorten_history_label(const gchar *text) {
     gchar *single_line;
-    gchar *p;
-    GString *label;
+    glong char_count;
+    const gchar *truncate_at;
 
     if (text == NULL || *text == '\0') {
         return g_strdup("(empty)");
     }
 
-    single_line = g_strdup(text);
-    p = single_line;
-    while (*p) {
-        if (*p == '\n' || *p == '\r' || *p == '\t') {
-            *p = ' ';
-        }
-        p++;
+    single_line = normalize_text_whitespace(text);
+    if (*single_line == '\0') {
+        g_free(single_line);
+        return g_strdup("(empty)");
     }
 
-    label = g_string_sized_new(64);
-    p = single_line;
-    while (*p) {
-        if (*p != ' ' || (label->len > 0 && label->str[label->len - 1] != ' ')) {
-            g_string_append_c(label, *p);
-        }
-        p++;
+    char_count = g_utf8_strlen(single_line, -1);
+    if (char_count > HISTORY_PREVIEW_MAX_CHARS) {
+        truncate_at = g_utf8_offset_to_pointer(single_line, HISTORY_PREVIEW_MAX_CHARS);
+        gchar *truncated = g_strndup(single_line, truncate_at - single_line);
+        gchar *preview = g_strconcat(truncated, "…", NULL);
+
+        g_free(truncated);
+        g_free(single_line);
+        return preview;
     }
 
-    g_strstrip(label->str);
-    if (label->len > 60) {
-        g_string_truncate(label, 60);
-        g_string_append(label, "…");
-    }
-
-    g_free(single_line);
-    return g_string_free(label, FALSE);
+    return single_line;
 }
 
 static void on_history_item_activate(GtkMenuItem *item, gpointer user_data) {
@@ -80,6 +108,7 @@ static gboolean on_plugin_button_press(GtkWidget *widget, GdkEventButton *event,
 
             preview = shorten_history_label(entry_text);
             item = gtk_menu_item_new_with_label(preview);
+            gtk_widget_set_tooltip_text(item, entry_text);
             g_object_set_data_full(G_OBJECT(item), "clipboard-text", g_strdup(entry_text), g_free);
             g_signal_connect(item, "activate", G_CALLBACK(on_history_item_activate), monitor);
             gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
@@ -101,14 +130,7 @@ static void on_text_received(GtkClipboard *clipboard, const gchar *text, gpointe
         return;
     }
 
-    gchar *display_text = g_strdup(text);
-    gchar *p = display_text;
-    while (*p) {
-        if (*p == '\n' || *p == '\r' || *p == '\t') {
-            *p = ' ';
-        }
-        p++;
-    }
+    gchar *display_text = normalize_text_whitespace(text);
 
     if (*display_text == '\0') {
         g_free(display_text);
